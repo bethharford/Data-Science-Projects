@@ -1,0 +1,185 @@
+---
+title: "Analysis of Particle Trajectories and Goldfish Movement"
+author: "Beth Harford"
+date: \today
+fontsize: 11pt
+output:
+  bookdown::html_document2:
+    fig_height: 5
+    toc: yes
+    toc_depth: 1
+    toc_float:
+      collapsed: false
+    number_sections: false
+    code_folding: show
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(fpp3)
+library(kableExtra)
+```
+
+
+# Particle Tracjectory analysis.
+
+
+> 1. 
+
+```{r}
+ 
+ particles <- read_csv("particle.csv")
+ particles_data <- as_tibble(particles)
+
+ggplot(data = particles, 
+       mapping = aes(x = x,  
+                     y = y,
+                     colour = t, )) + 
+  geom_point() +
+  geom_vline(xintercept = 0, lty = 2, fill ="black") +
+  geom_hline(yintercept = 0, lty = 2, fill = "black") +
+  geom_path() + 
+  labs(x = "x-coordinate (m)", 
+       y = "y-coordinate (m)",
+       color = "Time (s)",
+       title = "Particle trajectory over time ") + 
+
+  theme_bw() +
+  scale_color_viridis_c()
+
+```
+
+> 2. 
+
+```{r}
+ggplot(data = particles, 
+       mapping = aes(x = x, 
+                     y = y,)) +
+  geom_density_2d(colour = "black") + 
+  geom_rug() + 
+  labs(
+    title = "Density plot of particle's location", 
+    x = "x-coordinate (m)", 
+    y = "y-coordinate (m)", 
+  ) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.5, color = "grey") +
+  geom_hline(yintercept = 0, lty = 2, alpha = 0.5, color = "grey") +
+  theme_bw() 
+
+```
+
+
+> 3. 
+
+```{r}
+
+#create the x,y quadrants
+particles_quad <- particles_data %>%
+  mutate(quadrant = case_when (
+    x < 0  & y < 0 ~ "bottom-left", 
+    x >= 0  & y < 0 ~ "bottom-right", 
+    x < 0 & y >= 0 ~ "top-left", 
+    x >= 0 & y >= 0 ~ "top-right"
+  )) 
+
+ particles_quads <- particles_quad %>%
+   group_by(quadrant) %>% 
+  summarise(time_quadrant = n())
+
+particles_coordinates <- particles_quads %>% 
+  mutate(x.column = c(-1, 1, -1, 1), 
+         y.column = c(-1, -1, 1, 1))
+
+#using ggplot 
+ggplot(data = particles_coordinates, 
+      mapping = aes(x = x.column, 
+                    y = y.column, 
+                    fill = time_quadrant)) + 
+  geom_tile(width = 2, height = 2, color = 1) + 
+  geom_text(aes(label = time_quadrant), color = "black", size = 4) +  
+  scale_fill_gradient(low = "yellow", high 
+                      = "red", name = "Seconds Spent") + 
+  labs(
+    title = "Heat map of the time the particle spends in each quadrant", 
+    x = "x", 
+    y = "y", 
+  ) + 
+  theme_bw()  
+  
+```
+
+
+
+# Goldfish Movement 
+
+
+> 1. 
+
+```{r}
+
+goldfish_data <- read_csv("goldfish.csv") %>%
+  mutate(day = as_date(t, origin = "2016-12-31")) %>%
+  as_tsibble(index = day) %>%
+  mutate(Month = yearmonth(day))
+
+```
+
+
+> 2. 
+
+```{r}
+
+goldfish_d <- goldfish_data %>%
+  index_by(Month) %>%
+  summarise(x = mean(x), y = mean(y)) 
+
+ggplot(data = goldfish_d,
+       mapping = aes(x = x, 
+                     y = y, 
+                     colour = as.numeric(goldfish_d$Month) - min(as.numeric(min(goldfish_d$Month))) + 1)) +
+  geom_point() + 
+  geom_path() +
+  labs(x = "x-coordinate (metres)", 
+       y = "y-coordinate (metres)", 
+       colour = "Month", 
+       title = "Monthly average position of goldfish over four years") +
+  theme_bw() +
+  scale_color_viridis_c(option = "C")
+
+```
+
+
+Based on this plot showing the average position of the goldfish per month, and its trajectory over time - we can observe that as the months progress, the midday position of the goldfish seems to move further and further away from the center of the tank. The movement of the goldfish could be due to swimming patterns. The midday position of the goldfish appears to move outward at a consistent angle every 12 months. This suggests that if you start from any point (a given month), you could trace a straight line out to track its movements over time.
+
+> 3. 
+
+```{r}
+goldfish_long <- goldfish_d %>%
+pivot_longer(!c("Month"), names_to = "Coordinate", values_to = "value") 
+ 
+  
+ggplot(goldfish_long, aes(x = Month, y = value, colour = Coordinate)) + 
+  labs(x = "Month", 
+       y = "Location", 
+       title = "Monthly average x and y coordinates of the goldfish") +
+  geom_line() +
+  theme_bw()
+
+```
+
+
+From looking at this plot, we can see that there is some seasonality. We can observe multiplicative seasonality, as the seasonal variations increase in magnitude over time.  There seems to be a peak in the x-coordinate in Dec/Jan of each year, and a peak in the y-coordinate of the goldfish position in March/April of each year. There seems to be a trough in the x-coordinate during the middle of the year (Jun/Jul/Aug), and a trough in the y-coordinate in the later half of the year (Sept/Oct/Nov) in terms of the goldfish position. The fanning out of the x and y coordinate makes sense, given that the midday position of the goldfish is moving further and further away from the center of the tank over four years.
+
+> 4. 
+
+```{r}
+gg_subseries(goldfish_d %>%
+ pivot_longer(!c("Month"), names_to = "variable", values_to = "Location"))
+
+```
+
+I believe that the both the x time series and the y time series are seasonal, as there is a regular and repeating pattern in terms of the midday position (x and y coordinates) of the goldfish. Over the years, we can observe that there is frequently a peak in the x-coordinate during Dec/Jan, and a peak for the y-coordinate during March/April. We can observe that there is frequently a trough in the x-coordinate during (Jun/Jul/Aug), and a trough in the y-coordinate in the later end of the year (Sept/Oct/Nov).There does not seem to be an obvious trend within this plot.The peaks of y occur in March/April, so, on average 3-4 months after the peak of x.
+
+
