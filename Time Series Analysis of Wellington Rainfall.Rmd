@@ -1,0 +1,221 @@
+---
+title: "Time Series Analysis of Wellington Rainfall"
+author: "Beth Harford"
+date: \today
+fontsize: 11pt
+output:
+  bookdown::html_document2:
+    fig_height: 5
+    toc: yes
+    toc_depth: 1
+    toc_float:
+      collapsed: false
+    number_sections: false
+    code_folding: show
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(fpp3)
+library(kableExtra)
+```
+
+# Wellington Rainfall
+> 1. 
+
+```{r}
+
+#Reading the data into R.
+
+wellington_rainfall <- read.csv("wellington_rainfall.csv")
+
+#Combining the year and month into one year-month date variable.
+
+Years <- as.character(wellington_rainfall$Year) 
+wellington_rainfall <- wellington_rainfall %>%
+mutate(Month = paste(Years, Month, sep = "-")) %>% 
+mutate(Month=yearmonth(Month))
+print(wellington_rainfall)
+
+#Coercing the data set into a tsibble object
+
+wellington_rainfall_tsibble <- as_tsibble(wellington_rainfall, index = Month)
+
+#Scanning the Tsibble for missing data 
+wellington_rainfall_missing <- wellington_rainfall_tsibble %>%
+  scan_gaps()
+
+wellington_rainfall_missing
+
+#Filling in the gaps in the original tsibble with missing values NA.
+#Perform a calender adjustment to calculate average rainfall per day for each month.
+#Keep only the month variable and rainfall per day
+
+total_wellington_rainfall <- wellington_rainfall_tsibble %>% fill_gaps(.full = TRUE) %>%
+  mutate(days_rainfall = days_in_month(Month)) %>%
+  mutate(rainfall_per_day = Rainfall / days_rainfall) %>%
+  select(Month, rainfall_per_day)
+  
+#Plotting the monthly time series of average rainfall per day.
+
+autoplot(total_wellington_rainfall)
+
+```
+
+
+> 2. 
+
+```{r}
+#A - Forecasting 
+
+#tsibble that only considers the time series before the missing data.
+
+before <- total_wellington_rainfall %>%
+  mutate(Month = yearmonth(total_wellington_rainfall$Month)) %>%
+  filter(Month >= yearmonth("1960-01") & Month <= yearmonth("1993-04")) %>%
+  as_tsibble(index = Month) 
+
+#Fit the seasonal naive model to the rainfall per day
+rainfall_fit <- before %>%
+  model(seasonal_naive = SNAIVE(rainfall_per_day))
+
+#Forecasting 15 periods ahead
+rainfall_forecast <- rainfall_fit %>%
+  forecast(h=15)
+
+rainfall_forecast %>%
+ autoplot(before)
+
+#Convert the fable to a tibble. 
+
+rainfall_forecast_tsibble <- rainfall_forecast %>%
+  as_tsibble() %>%
+  rename(Forecast = .mean) %>%
+  select(Month, Forecast)
+
+#Reporting the forecasted values. 
+
+rainfall_forecast_tsibble
+
+```
+
+```{r}
+#B - Backcasting
+
+#Creating a tsibble that only considers the time series after the missing data.
+#Create a new variable that reverses the direction of time.
+#Update the tsibble time index to be the new reversed time variable.
+#Convert this into the yearmonth date format.
+
+after <- total_wellington_rainfall %>%
+  mutate(Month = yearmonth(Month)) %>%
+  filter(Month >= yearmonth("1994-08") & Month <= yearmonth("2025-02")) %>%
+  mutate(reverse_time = rev(row_number(Month))) %>%
+  update_tsibble(index=reverse_time)
+
+#Fit the seasonal naive method to the rainfall per day series using the time-reversed after data.
+
+rainfall.fit.after <- after %>%
+  model(seasonal_naive = SNAIVE(rainfall_per_day ~ lag(12)))
+
+#Forecast 15 periods ahead
+#Fix the dates within the Fable by creating a Month variable. 
+
+rainfall_forecast_after <- rainfall.fit.after %>%
+forecast(h=15) %>%
+mutate(Month = yearmonth(seq(from = ymd("1994-07-01"), to =   ymd("1993-05-01"), by = "-1 month")))
+
+#Coerce the tsibble time index to be your new time variable.
+#Rename the point forecast .mean to backcast
+rainfall_forecast_tsibble_after <- rainfall_forecast_after %>%
+  as_tsibble() %>%
+  update_tsibble(index = Month) %>%
+  rename(Backcast = .mean) %>%
+  select(Month, Backcast)
+
+#Reporting the backcasted values.
+rainfall_forecast_tsibble_after
+
+
+#Joining the forecast tsibble and backcast tsibble together by month.
+
+forecast_backcast <- left_join(rainfall_forecast_tsibble, rainfall_forecast_tsibble_after, by = "Month")
+
+#Computing imputed values by taking the average of point forecast and point backcast.
+
+forecast_backcast <- forecast_backcast %>%
+  mutate(Average = (Forecast + Backcast)/2)
+
+#Plot the original time gapped series and layer on the imputed values with a different colour.
+
+total_wellington_rainfall %>%
+  autoplot() + 
+  geom_line(data = forecast_backcast, aes(x = Month, y = Average), 
+            colour = "red") +
+  labs(title = "Original time series vs Imputed Rainfall values", 
+       y = "Average Rainfall Per Day (mm)", x = "Month")
+
+#Join your original tsibble (the one with 15 missing values) and your imputed values tibble by month, keeping all the rows from the original data set.
+
+total_wellington_rainfall <- left_join(total_wellington_rainfall, forecast_backcast, by = "Month")
+
+#Replace the missing values of rainfall per day by the imputed values. The if-else function will be helpful.
+
+total_wellington_rainfall <- total_wellington_rainfall %>%
+  mutate(rainfall_per_day = ifelse(is.na(rainfall_per_day), Average, rainfall_per_day))
+
+
+total_wellington_rainfall_final <- total_wellington_rainfall %>%
+  select(Month, rainfall_per_day)
+
+```
+
+
+> 3. 
+
+```{r}
+
+#Plot a sub-series plot and comment on the seasonality of the Wellington Rainfall 
+
+total_wellington_rainfall %>%
+  gg_subseries(rainfall_per_day) +
+  labs(y = "rainfall per day", 
+       title = "Subseries plot for average rainfall per day")
+
+#Perform and STL Decomposition on the Rainfall per day series. (keep trend and season at default settings, and set robust = TRUE)
+
+dcmp <- total_wellington_rainfall_final %>%
+  model(stl = STL(rainfall_per_day, robust = TRUE)) %>%
+  components() 
+
+  dcmp %>%
+  autoplot()
+
+#Seasonally adjusted time series 
+
+ total_wellington_rainfall_final %>%
+  autoplot(rainfall_per_day, color = "black") + 
+   ggtitle("Seasonally-adjusted time series")
+ 
+#correlogram of the remainder component.
+ dcmp %>%
+  ACF(remainder) %>%
+ autoplot() + ggtitle("ACF of Remainder")
+ 
+ #verifying conclusion wiht ljung-box test 
+ 
+ dcmp %>%
+ features(remainder, features = ljung_box, lag = 24, dof = 0)
+
+```
+- From looking at the sub-series plot of wellington rainfall, we can see that there is some seasonality with there being more rainfall around the winter months (June-August), and less rainfall during the Spring (September-November) and Summer (December-February) months.The rainiest month on average is June/July, and the least rainiest month on average is Dec/Jan.
+
+- From looking at the decomposition plot, and the magnitude of each of these components in our time series, we can see that the remainder is the dominant contributor to the variation in our time series, and is on the same scale as our data (0-10). We can also see that the trend and seasonality account only contribute a small amount to the variation in the data. In fact, the trend is the component left over after we have analysed the remainder and seasonality component. From looking at the individual components, we can see that there does not seem to be much of a trend, and the seasonal component is a chaotic.
+
+- From looking at the seasonally adjusted time series, it does not make it easier to see an underlying trend in the original series. The data fluctuates, going up and down, so it is neither increasing nor decreasing - it is staying flat. This makes sense considering that in our decomposition plot, the trend component contributed only a small amount to the variation in our time series. The seasonally adjusted plot also looks quite similar to our original data plot, suggesting that seasonality does not contribute a lot to the data.
+
+
+- We have evidence against the null hypothesis stating that the remainder term is consistent with white noise as when we did our ljung-Box test, we got a p-value of (4.0001908*10^-7) which is statistically significant. From looking at the correlogram, we can see significant autocorrelation at lags 5 and lags 12. The significant autocorrelation at lag 12 suggests that there may still be a small amount of seasonality still left in the series that we are not seeing in the time plot, but you can see it in the ACF. With white noise, you would generally expect to see 95% of the data to lie within the bands. Even without looking at the p-value from the ljung-Box test, the correlogram does not appear to be consistent with white noise, as you have seven spikes that lie outside of the 95% interval.
+
