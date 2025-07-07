@@ -1,0 +1,360 @@
+---
+title: "Time Series Analysis of Real Hourly Earnings and NZ Visitor Trends"
+author: "Beth Harford"
+date: \today
+fontsize: 11pt
+output:
+  bookdown::html_document2:
+    fig_height: 5
+    toc: yes
+    toc_depth: 1
+    toc_float:
+      collapsed: false
+    number_sections: false
+    code_folding: show
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(fpp3)
+library(kableExtra)
+```
+
+
+#Real Hourly Earnings
+
+```{r, echo = FALSE, message = FALSE}
+
+data = read_csv("real.csv") %>% 
+  mutate(Quarter = yearquarter(Quarter)) %>%
+  as_tsibble(index = Quarter)
+
+train = data %>%
+  filter(Quarter < yearquarter("2022 Q1"))
+
+train %>%
+  autoplot(Real) + 
+  labs(y = "Average Real Hourly Earnings (NZD)",
+       title = "Quarterly Average Real Hourly Earnings for the Education and Training Sector") + 
+  theme_bw()
+
+```
+
+> 1. 
+
+```{r, warning = FALSE}
+
+#Plotting the differenced real earnings series from the training series.
+
+train %>%
+autoplot(difference(Real)) +
+ylab("Quarterly Average Real Hourly Earnings")
+
+#Verify this using a KPSS test on the differenced productivity series.
+
+train %>%
+  mutate(diff_real = difference(Real)) %>%
+  features(diff_real, unitroot_kpss)
+
+```
+From looking at the differenced real earning series, it seems to be roughly stationary. The mean seems to hover around zero. There is no obvious increasing or decreasing trend over time. There is also no seasonality present in the plot. It looks like we have roughly constant variance, the observations seems to oscillate around -1 and 1. There are some sudden spikes, including a large increase in 2013, and a large negative decrease in 2020.
+
+Based on the p-value (0.1) that we got from our KPSS test, our p-value is not statistically significant, and therefore we do not have any evidence against the null hypothesis that the data is stationary and non-seasonal.
+
+> 2. 
+
+```{r, warning = FALSE}
+
+#Plot the ACF and PACF plots for the differenced data 
+
+gg_tsdisplay(train, difference(Real, differences = 1), plot_type = "partial")
+
+```
+
+I have chosen this ARIMA(0,1,0) model (p = 0, d = 1, and q = 0), which means that we have a Random walk model. For the AR (p) There is no noticeable pattern in the ACF plot, no evidence of exponential decay or a decaying sinusoidal pattern, nor is there any significant lags in the PACF, which means p = 0, and thus we do not need to fit any autoregressive terms.
+
+For the MA (q), there is no obvious pattern in the PACF plot, we do not observe the exponential decaying of lags, nor is there any significant lags in the ACF plot, which means that q = 0. Therefore, we do not need to fit any moving average terms. 
+
+For the differencing term, we did a first order differencing on the data in an attempt to make it stationary, therefore d = 1
+
+> 3. 
+
+```{r}
+
+#Fitting the candidate model as well as the automatic ARIMA model on the training set.
+
+fit <- train %>%
+  model(ARIMA(Real ~ pdq(0,1,0)), 
+        stepwise = ARIMA(Real)) 
+
+#Comparing the models using AICc to see which model has the best predictive ability
+
+glance(fit) %>%
+  select(.model, AICc)
+
+```
+The best model for this data is ARIMA(0,1,0), and we are confident of this due to the fact that the manually chosen ARIMA model is equal to the one selected by the automated model selection algorithm, based on the AICc.
+
+The back shift notation $y_{t} - y_{t-1} = c + \epsilon_{t}$ 
+
+where $y_{t} - By_{t} = c + \epsilon_{t}$ 
+
+where $(1-B)y_{t} = c + \epsilon_{t}$ 
+
+where $(1-B)y_{t} = \epsilon_{t}$ because c = 0 
+
+where $\epsilon_t \sim iidN(0,\sigma^2)$
+
+> 4. 
+
+```{r}
+
+#Fit the chosen ARIMA model and the best ETS model
+fits <- train %>%
+  model(arima = ARIMA(Real ~ pdq(0,1,0)),
+        SES = ETS(Real ~ error("A") + trend("N") + season("N")))
+
+
+
+#Forecast h = 4 periods ahead 
+fc_fits <- fit %>%
+  forecast(h = 4)
+
+#Overlay your forecasts on the full real hourly earnings data set. 
+fits %>% 
+forecast(h = 4) %>%
+autoplot(data)
+
+#Accuracy of fits 
+ fits %>%
+ forecast(h = 4) %>%
+ accuracy(data) %>%
+ select(.model, RMSE, MAE, MAPE, MASE)
+
+
+
+```
+The real hourly earning data shows a strong downward trend in recent quarters. Whilst both ARIMA and SES models have 80% and 95% prediction intervals which contain the observed values, the point forecasts are considerably different to what we observed in the data. Of the two, the ARIMA model provides point forecasts that are closer to the observed values, suggesting that it has a stronger forecasting capability than SES.
+
+Based on the outputs provided by RMSE, MAE, MAPE, and MASE, the model with the best forecast accuracy is the ARIMA as it has the lowest RMSE, MAE, MAPE and MASE values. This makes sense given we can see that our point forecasts for our ARIMA model is slightly closer to what was actually observed in the data.
+
+
+# Problem 2: Visitors to New Zealand
+
+```{r, echo = FALSE, message = FALSE}
+data = read_csv("visitors.csv") %>%
+  mutate(Quarter = yearquarter(Quarter)) %>%
+  as_tsibble(index = Quarter) 
+
+train = data %>%
+  filter(Quarter < yearquarter("2020 Q1"))
+
+train %>%
+  autoplot(Australia) +
+  labs(y = "Average number of visitors per day",
+       title = "Quarterly Average Number of Visitors per Day from Australia") +
+  theme_bw()
+```
+
+> 1. 
+
+From looking at the plot which contains the average number of visitors to New Zealand per day from Australia, It looks like the Holt-Winters model and the Holt-Winters damped model would be the most appropriate ETS models to fit. There is seasonality in this plot and the Holt Winters model is the method best suited to capture seasonality. We can see that the plot has multiplicative seasonality, therefore we should choose the Holt-Winters multiplicative method (A,M). 
+
+This plot shows an increasing, positive, non-linear trend, however, this upward trend may not continue indefinitely into the future, which makes the Holt Winters damped method a suitable model to fit to this data. If we did not include the Holt-Winters damped method, the Holt-Winters model by itself would likely over-forecast, making it difficult to make long-term predictions. We can see that this plot has multiplicative seasonality, therefore we should choose the Holt-Winters damped multiplicative method (Ad, M).
+
+As the seasonal component is multiplicative, the error should be too. This is because an additive error term would be numerically unstable if we have multiplicative seasonality.
+
+> 2. 
+
+```{r}
+
+#Fitting two candidate models as well as the automatic ETS model.
+
+fit <- train %>%
+  model(model = ETS(Australia),
+      hw = ETS(Australia ~ error("M") + trend("A") + season("M")), 
+      hw_damped = ETS(Australia ~ error("M") + trend("Ad") + season("M"))) 
+
+
+#Report summary of model 
+
+glance(fit) %>%
+  select(.model, AICc)
+
+#Output the parameter estimates from the model that has the best predictive ability 
+
+fit_model <- fit %>%
+  select(hw) 
+
+report(fit_model)
+
+```
+From comparing the models using AICc, we can see that the model with the best predictive ability is the Holt-Winters Multiplicative model, as it has the lowest AICc value. We are confident of this because the AICc output for the Holt-Winters Multiplicative method is the same as the AICc for the automatic ETS model.
+
+From looking at the smoothing parameters, we can see that the estimated alpha value of 0.68573 is moderate, meaning that we put more weight on our distant past than our recent past (the longer the memory it has of the distant past). As the alpha is moderate, you are taking a longer average - so you are seeing a smoother level of the fitted values.
+
+The estimated beta is where $\hat{\beta^*} = \frac{\hat{\beta}}{\hat{a}}$ 
+$\frac{0.0001001382}{0.68573} = 0.000146032$ 
+
+The $\hat{\beta^*}$ is very small, therefore the slope does not change with time. 
+
+The estimated gamma value of 0.0001000839 is low which means that the season is not changing all that much with time. 
+
+> 3. 
+
+```{r}
+#Box cox transformations
+
+train_transformation <- train %>%
+features(Australia, features = guerrero) %>%
+ pull(lambda_guerrero)
+
+train %>%
+  autoplot(box_cox(Australia, train_transformation))
+
+```
+The optimal lambda value from the Box-Cox transformation is -0.120888694920767
+
+I believe that the seasonal variation is more stable than the original series now that we have done a Box-Cox transformation. It looks like the time series has approximately constant variance. 
+
+> 4. 
+
+```{r, warning = FALSE}
+#Calculate the Seasonal strength 
+
+train %>%
+mutate(box_cox = box_cox(Australia, train_transformation)) %>% 
+features(box_cox, feat_stl)
+
+#Seasonally difference the box-cox transformed training data.
+
+train %>%
+mutate(seasonal_cox = box_cox(Australia, train_transformation) %>% difference(4)) %>%   features(seasonal_cox, feat_stl)
+
+#Verify the order of seasonal differencing unitroot_nsdiffs
+ 
+train %>%
+mutate(box_cox = box_cox(Australia, train_transformation)) %>% 
+features(box_cox, unitroot_nsdiffs) 
+
+#Plot your seasonally differneced Box-cox transformed training data.
+train %>%
+autoplot(box_cox(Australia, train_transformation) %>% difference(4)) +
+ylab("Quarterly Average Number of Visitors per Day from Australia")
+
+#Perform a KPSS Unit root test on your seasonality 
+
+train %>%
+mutate(seasonal_cox = box_cox(Australia, train_transformation) %>% difference(4)) %>%
+  features(seasonal_cox, unitroot_kpss)
+
+#Verify the order of first differencing using the unitroot_ndiffs 
+
+train %>%
+mutate(seasonal_cox = box_cox(Australia, train_transformation) %>% difference(4)) %>%
+features(seasonal_cox, unitroot_ndiffs)
+
+```
+- As our seasonal strength is 0.9900773, which is greater than $F_s > 0.64$, one seasonal difference is needed. This is because we have got strong seasonality in our detrended series relative to the remainder.
+
+- No, we do not seasonally difference our data again, as our seasonal_strength_year value is 0.08 i.e $F_s < 0.64$. Furthermore, based on the test from our unitroot_nsdiffs, it says that we only need to apply one seasonal difference to our data. So, D = 1.
+
+- Yes, I believe that the time series has roughly constant mean over time. There is a sharp spike and drop from 2018-2020, which seems like a a bit of an anomaly in the data.
+
+- Based on the p-value $0.1$, we do not have any evidence against the null hypothesis that the data is stationary and non-seasonal. Therefore, the series could be stationary and non-seasonal.
+
+- Based on our unitroot_diffs test which = $0$ we do not need to do first order differencing, as we have been able to make our series stationary by doing a seasonal difference. So, d = 0 
+
+> 5. 
+
+```{r, warning = FALSE}
+
+#Plot the ACF and the PACF plots on your differenced box-cox transformed training data 
+
+train %>%
+mutate(seasonal_cox = box_cox(Australia, train_transformation) %>% difference(4)) %>% 
+      gg_tsdisplay(seasonal_cox, plot_type = "partial", lag_max = 20)
+        
+```
+
+The two ARIMA candidate models that I have decided to fit on our data is ARIMA = pdq(1,0,0) + PDQ(1,1,0) and ARIMA = pdq(0,0,2) + PDQ(1,1,0). It would not make sense to fit PDQ(0,1,0), as that would suggest we have no seasonal component, which is not consistent with the significant lag that we observe in the PACF.
+
+For the AR(p), there is a decaying sinusoidal pattern in the ACF plot, and looking at the PACF we can see that there is a significant lag before the seasonal frequency (m = 4), therefore p = 1. We have already done a seasonal differencing to our data (m = 4), to make the series stationary, and therefore we do not need to do a first order differencing, therefore d = 0. For the MA(q), the PACF is exponentially decaying, and there is two significant lags before our seasonal frequency (m = 4) in the ACF plot, therefore q = 2
+
+For the AR(P), we have a significant lag at the seasonal frequency m = 4 in the PACF, and no other significant lag which is a multiple of the seasonal frequency (i.e no significant lag at 8, 12, 16, 20 etc), therefore, P = 1, and we only fit one seasonal autoregressive term. We did a seasonal differencing to our data to make it stationary, therefore D = 1. For the MA(Q), we do not have a significant lag at the seasonal frequency m = 4, and no other significant lags at the multiple of the seasonal frequency in our ACF plot, therefore Q = 0.
+> 6.
+
+```{r, warning = FALSE}
+
+#Fitting the two candidate ARIMA models and the automatic stepwise search model.
+train <- train %>%
+  mutate(seasonal_cox = box_cox(Australia, train_transformation))
+  
+fit_arima <- train %>%
+ model(arima_1 = ARIMA(seasonal_cox ~ pdq(0,0,2) + PDQ(1,1,0)),
+       arima_2 = ARIMA(seasonal_cox ~ pdq(1,0,0) + PDQ(1,1,0)), 
+       auto = ARIMA(seasonal_cox, stepwise = TRUE))
+
+#Getting the output parameters 
+glance(fit_arima) %>%
+  select(.model, AICc)
+
+fit_arima %>%
+  select(auto) %>%
+  report()
+      
+
+
+```
+
+- Based on the AIC, we can see the ARIMA model picked by the auto function is the model that has the best predictive ability. This makes as an algorithm automatically selects the best fitting model (i.e the best combination of p,d,q and seasonal P,D,Q)
+
+The fitting model equation using back shift notation is as follows: 
+
+Formula: $\Phi_P(B^m)\phi(B)\Delta^D_m\Delta^d y_t = c + \Theta_Q(B^m)\theta(B)\epsilon_t$
+
+$(1-\phi_1{B})(1-B^4)w_t  = c + (1+\Theta_1{B}^4+\Theta_2{B}^8)\epsilon_t$
+
+Therefore, the fitted model equation is: 
+
+$(1-0.7489{B})(1-{B^4})w_t = 0.0028 + (1-0.8354{B^4} + 0.4407{B^8})\epsilon_t$
+
+where $w_t = \frac{y_t^\lambda-1}{\lambda}$
+
+$w_t = \frac{y_t^{-0.1209}-1}{-0.1209}$ 
+> 7. 
+
+```{r, warning = FALSE}
+
+model_stretch <- train %>%
+  stretch_tsibble(.init = 32, .step = 1)
+
+fit_cv <- model_stretch %>%
+  model(ETS = ETS(Australia ~ error("M") + trend("A") + season("M")), 
+        arima = ARIMA(box_cox(Australia, train_transformation)~1 + pdq(1,0,0) + PDQ(0,1,2))) %>%
+  forecast(h = 1) %>%
+  accuracy(data) 
+
+  fit_cv %>%
+  select(.model, MASE)
+
+```
+
+As we are working with two different types of data - one that has been Box-Cox transformed for the ARIMA model and another that is on the original scale for the ETS model - it is important to use a scale independent forecast accuracy metric. MASE (Mean Absolute Scaled Error) is an appropriate choice as it allows for a fair comparison between the two models regardless of the scale or transformation of the data. RMSE or MAE are not an appropriate choice as they are scale dependent measures. The model with the best out of sample performance is the ARIMA model as it has a lower MASE than ETS.
+
+
+> 8. 
+
+```{r}
+train %>%
+    model(ETS = ETS(Australia ~ error("M") + trend("A") + season("M")), 
+        arima = ARIMA(box_cox(Australia, train_transformation)~1 + pdq(1,0,0) + PDQ(0,1,2))) %>%
+  forecast(h = 20) %>%
+  autoplot() +
+  autolayer(data)
+
+```
+From looking at the plot, we can see that the ARIMA and the ETS model does not predict well for abnormal events, such as the sharp decline caused by COVID-19 around 2020 Q1. Whilst the ETS and ARIMA models generally capture the trend and the seasonality of the data prior to the COVID-19 shock, the forecasts diverge significantly during COVID-19, however, the forecasting for both model seems to improve after this shock, as our observed data falls roughly in the 80% and 95% prediction intervals for the ARIMA and ETS model. This suggests that the models are effective at following the general trend of the data, however, they are less effective when there is a shock to the data, like COVID-19.
+
